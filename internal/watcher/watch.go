@@ -1,4 +1,4 @@
-package watch
+package watcher
 
 import (
 	"encoding/json"
@@ -16,7 +16,7 @@ type TelegramConfig struct {
 	ChatID   string `json:"chat_id"`
 }
 
-func loadTelegramConfig(path string) (*TelegramConfig, error) {
+func LoadTelegramConfig(path string) (*TelegramConfig, error) {
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -28,7 +28,7 @@ func loadTelegramConfig(path string) (*TelegramConfig, error) {
 	return &cfg, nil
 }
 
-func sendTelegramMessage(token, chatID, message string) error {
+func SendTelegramMessage(token, chatID, message string) error {
 	apiURL := "https://api.telegram.org/bot" + token + "/sendMessage"
 	resp, err := http.PostForm(apiURL, url.Values{
 		"chat_id": {chatID},
@@ -41,48 +41,44 @@ func sendTelegramMessage(token, chatID, message string) error {
 	return nil
 }
 
-// WatchWalletOrders écoute les ordres d'un wallet Hyperliquid et envoie une notif Telegram à chaque nouvel ordre.
-func WatchWalletOrders(wallet string) error {
-	cfg, err := loadTelegramConfig("config.json")
-	if err != nil {
-		log.Println("Impossible de charger config.json, notifications Telegram désactivées:", err)
-	}
-
+// WatchWalletOrders listens for orders on a Hyperliquid wallet and sends a Telegram notification for each new order.
+func WatchWalletOrders(cfg *TelegramConfig, wallet string) error {
 	wsClient, err := stream.NewHyperliquidWebsocketClient("wss://api.hyperliquid.xyz/ws")
 	if err != nil {
-		return fmt.Errorf("erreur création client websocket: %w", err)
+		return fmt.Errorf("error creating websocket client: %w", err)
 	}
 
 	go func() {
 		for err := range wsClient.ErrorChan {
-			log.Println("Erreur WebSocket:", err)
+			log.Println("WebSocket error:", err)
 		}
 	}()
 
 	err = wsClient.StreamOrderUpdates(wallet)
 	if err != nil {
-		return fmt.Errorf("erreur stream order updates: %w", err)
+		return fmt.Errorf("error streaming order updates: %w", err)
 	}
 
-	fmt.Printf("Watcher démarré pour %s, en attente d'ordres...\n", wallet)
+	fmt.Printf("Watcher started for %s, waiting for orders...\n", wallet)
 	for orders := range wsClient.OrderChan {
 		for _, order := range orders {
 			o := order.Order
 			var side string
-			if o.Side == "A" {
-				side = "ACHAT"
-			} else if o.Side == "B" {
-				side = "VENTE"
-			} else {
+			switch o.Side {
+			case "A":
+				side = "BUY"
+			case "B":
+				side = "SELL"
+			default:
 				side = o.Side
 			}
 			msg := fmt.Sprintf("[%s] %s %s %s @ %s (oid: %d, status: %s)",
 				wallet, side, o.Sz, o.Coin, o.LimitPx, o.Oid, order.Status)
-			fmt.Println(msg) // debug local
+			fmt.Println(msg) // local debug
 			if cfg != nil && cfg.BotToken != "" && cfg.ChatID != "" {
-				err := sendTelegramMessage(cfg.BotToken, cfg.ChatID, msg)
+				err := SendTelegramMessage(cfg.BotToken, cfg.ChatID, msg)
 				if err != nil {
-					log.Println("Erreur envoi Telegram:", err)
+					log.Println("Telegram send error:", err)
 				}
 			}
 		}
